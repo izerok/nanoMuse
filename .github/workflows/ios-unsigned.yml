@@ -1,0 +1,129 @@
+# iOS · unsigned IPA（无签名出包，不上 TestFlight、不提交 App Store）
+#
+# 用途：只在 macOS runner 上把 iOS app 编译成无签名 .app，打成 Payload IPA 当作产物下载。
+# 与上游 ios-check.yml 的关系：步骤（checkout 递归子模块、Xcode、Go、Homebrew 包、
+# 依赖缓存、原生依赖构建、无签名 xcodebuild、NanoMuse/ 零警告）原样复用，
+# 差别只在最后多两步：找 .app、打 IPA、上传产物。没有其他改动。
+#
+# 硬边界（本文件自证，跑之前可 grep）：
+#   - 没有任何 secrets.* 引用（grep "secrets\." 应为 0 行）
+#   - 没有 fastlane、没有 upload_to_testflight、没有 app-store 导出
+#   - permissions 只有 contents: read；不写仓库、不建 release、不推送
+#   - 触发方式只有 workflow_dispatch（手动），不跟随 push/tag 自动跑
+#   - 产物保留 7 天，过期自动删；产物是无签名 IPA，不能直接装机，必须重签（见 docs/PLAN.md §3）
+#
+# 放置位置（需要用户决策后才做，本文件本身不执行放置）：
+#   fork 后的仓库：.github/workflows/ios-unsigned.yml，然后在 Actions 页手动触发。
+#   不要放进上游 nano-muse/nanoMuse（本轮硬边界：不向上游推送）。
+name: iOS · unsigned IPA
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-unsigned-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: xcodebuild (unsigned) + package IPA
+    runs-on: macos-26
+    timeout-minutes: 150
+    env:
+      GO_VERSION: "1.25"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: latest-stable
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: android/deps/rclone-mobile/go.sum
+
+      - name: Homebrew packages (iSH kernel and rootfs tooling)
+        run: brew install ninja meson llvm lld libarchive pkg-config
+
+      - name: Build-time configuration
+        working-directory: android/src/ios
+        run: cp Configs/ProviderCustomization.xcconfig.example Configs/ProviderCustomization.xcconfig
+
+      - name: Pinned iSH revision
+        id: ish
+        run: echo "rev=$(git rev-parse HEAD:android/deps/ish)" >> "$GITHUB_OUTPUT"
+
+      - name: Native dependency cache
+        id: deps-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            android/deps/libs
+            android/deps/include
+            android/deps/resources
+            android/deps/frameworks
+            android/deps/lame-build
+          key: ios-deps-${{ runner.os }}-${{ steps.ish.outputs.rev }}-${{ hashFiles('android/deps/*.sh', 'android/deps/ffmpeg-patch/**', 'android/deps/rclone-mobile/**') }}
+
+      - name: Native dependencies (LAME -> FFmpeg -> iSH -> Alpine rootfs -> rclone)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        working-directory: android
+        run: |
+          ./deps/build_lame.sh
+          ./deps/build_ffmpeg.sh
+          ./deps/build_ish.sh
+          ./deps/prepare_alpine_rootfs.sh
+          ./deps/build_rclone_ios.sh
+
+      - name: Build for a device, unsigned
+        working-directory: android/src/ios
+        run: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild build \
+            -project Minis.xcodeproj -scheme Minis -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
+            -skipPackagePluginValidation -skipMacroValidation \
+            2>&1 | tee build/xcodebuild.log | grep -E "error:|/NanoMuse/.*warning:|BUILD|Compiling|Linking" || true
+          grep -q "\*\* BUILD SUCCEEDED \*\*" build/xcodebuild.log
+
+      - name: Zero warnings in NanoMuse/
+        working-directory: android/src/ios
+        run: |
+          if grep -E "/NanoMuse/[^:]+:[0-9]+:[0-9]+: warning:" build/xcodebuild.log | sort -u | tee build/nanomuse-warnings.txt | grep -q .; then
+            echo "::error::warnings in NanoMuse/ (see above)"
+            exit 1
+          fi
+
+      - name: Package unsigned IPA
+        working-directory: android/src/ios
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/DerivedData -type d -name '*.app' -path '*iphoneos*' | head -1)"
+          test -n "$APP_PATH" || { echo "找不到 .app" >&2; exit 1; }
+          echo "APP_PATH=$APP_PATH"
+          mkdir -p build/ipa-stage/Payload
+          cp -R "$APP_PATH" build/ipa-stage/Payload/
+          VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP_PATH/Info.plist" 2>/dev/null || echo unknown)"
+          echo "VERSION=$VERSION"
+          (cd build/ipa-stage && zip -qr "../nanoMuse-unsigned-${VERSION}.ipa" Payload)
+          ls -lh "build/nanoMuse-unsigned-${VERSION}.ipa"
+          unzip -l "build/nanoMuse-unsigned-${VERSION}.ipa" | head -20
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: nanoMuse-ios-unsigned-${{ github.run_number }}
+          path: |
+            android/src/ios/build/nanoMuse-unsigned-*.ipa
+            android/src/ios/build/xcodebuild.log
+          retention-days: 7
+          if-no-files-found: error
