@@ -1053,7 +1053,11 @@ struct MinisApp: App {
     private static func migrateSharedDirToAppGroup() {
         let fm = FileManager.default
         let library = fm.urls(for: .libraryDirectory, in: .userDomainMask).first!
-        let container = fm.containerURL(forSecurityApplicationGroupIdentifier: "group.io.github.nanomuse.app")!
+        // Sideload fallback (fork-only): a resigned build whose profile lacks
+        // the App Group entitlement gets nil here; skipping the migration is
+        // safe (dest dirs are already covered by the minisAppGroupRoot
+        // fallback) and must not crash launch.
+        guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: "group.io.github.nanomuse.app") else { return }
 
         let migrations: [(source: URL, dest: URL, label: String)] = [
             // Legacy Library/MinisChat/shared → new shared
