@@ -258,19 +258,30 @@ extension AIChatViewModel {
     /// Everything under this path is exposed to iOS Files via the replicated
     /// FileProvider extension. Keep ONLY user-facing subdirs (shared, skills,
     /// memory) here — anything else leaks into "On My iPhone → nanoMuse".
-    nonisolated static var minisAppGroupRoot: URL {
-        FileManager.default.containerURL(
+    /// Sideload fallback (fork-only): when a resigned build's profile lacks
+    /// the App Group entitlement, containerURL returns nil. Falling back to
+    /// Library keeps the main app alive; FileProvider/Files sharing and
+    /// cross-extension sharing degrade, but launch no longer crashes. When
+    /// the official group exists, behaviour is unchanged.
+    nonisolated static var appGroupContainerOrLibraryFallback: URL {
+        if let container = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: SharedContainerStore.appGroupID
-        )!.appendingPathComponent("MinisFileProvider", isDirectory: true)
+        ) {
+            return container
+        }
+        return FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+    }
+
+    nonisolated static var minisAppGroupRoot: URL {
+        appGroupContainerOrLibraryFallback.appendingPathComponent("MinisFileProvider", isDirectory: true)
     }
 
     /// App Group subdirectory for private metadata that must NOT be exposed
     /// to iOS Files (mounted-folders.json, FileProvider extension logs, etc).
     /// Sibling of `minisAppGroupRoot` inside the same App Group container.
     nonisolated static var minisConfigRoot: URL {
-        let url = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: SharedContainerStore.appGroupID
-        )!.appendingPathComponent("MinisConfig", isDirectory: true)
+        let url = appGroupContainerOrLibraryFallback.appendingPathComponent("MinisConfig", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
