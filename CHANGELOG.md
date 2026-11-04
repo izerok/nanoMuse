@@ -75,6 +75,8 @@ All notable changes to nanoMuse. The format follows [Keep a Changelog](https://k
 
 - **Drew the desktop server picker with the page's own card styles.** The server row, its address form and its buttons now use the same card rows, fields and pills as the network row next to them, and a pending server change offers the same restart button the network row does, instead of the primitives' own look.
 
+- **Kept the Windows installer's update-assets check passing for pre-release builds.** The check's updater now considers pre-release candidates, so an unofficial build's assets verify the same way a stable release's do.
+
 - **Kept plugin choices across desktop restarts.** Startup preserved the saved bundle list and its order instead of replacing it with defaults, keeping enabled agent teams and automatic authorization review enabled and disabled automations disabled. For [#731](https://github.com/nano-muse/nanoMuse/issues/731).
 
 - Counted remote coding tools once using the originating agent's counting phase, excluded notes, and reconciled the count with the final result.

@@ -176,6 +176,11 @@ function makeUpdater(feedUrl, base) {
   // app-update.yml for electron-updater's own config reads; setFeedURL below is what it uses.
   writeFileSync(join(base, "app-update.yml"), `provider: generic\nurl: ${feedUrl}\n`);
   const updater = new NsisUpdater(null, appAdapter); // (options, app): the stub app, no feed options here
+  // Fork-only: the build under test is a pre-release (the unofficial label), and the
+  // library skips pre-release candidates unless told otherwise. Upstream's check runs
+  // stable versions only, so it never needed this. Without it the check reports "no
+  // update available" for a build whose assets are fine.
+  updater.allowPrerelease = true;
   updater.httpExecutor = new NodeHttpExecutor();
   updater.setFeedURL({ provider: "generic", url: feedUrl });
   updater.autoDownload = false;
