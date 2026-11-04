@@ -39,6 +39,8 @@ const dist = resolve(
   process.argv.find((a) => a.startsWith("--dist="))?.slice("--dist=".length) ?? "dist",
 );
 const shellVersion = JSON.parse(readFileSync(join(dist, "..", "package.json"), "utf8")).version;
+/** The pre-release tag of the shell's version (unofficial for 1.0.10-unofficial.1), if any. */
+const CHANNEL = String(shellVersion).split("-")[1]?.split(".")[0] ?? null;
 /**
  * The update metadata file electron-builder wrote: latest.yml for a stable version,
  * and the pre-release channel file for a pre-release version. For 1.0.10-unofficial.1
@@ -49,8 +51,7 @@ const shellVersion = JSON.parse(readFileSync(join(dist, "..", "package.json"), "
  */
 function findMetadata() {
   const names = ["latest.yml", "beta.yml"];
-  const prereleaseTag = String(shellVersion).split("-")[1]?.split(".")[0];
-  if (prereleaseTag) names.push(`${prereleaseTag}.yml`);
+  if (CHANNEL) names.push(`${CHANNEL}.yml`);
   for (const name of names) {
     const path = join(dist, name);
     if (existsSync(path)) return path;
@@ -202,6 +203,11 @@ function makeUpdater(feedUrl, base) {
   // stable versions only, so it never needed this. Without it the check reports "no
   // update available" for a build whose assets are fine.
   updater.allowPrerelease = true;
+  // Fork-only: same reason, second half. electron-builder names the channel file after
+  // the version's pre-release tag (unofficial.yml here), but the library defaults to
+  // the latest channel and would ask the feed for latest.yml, which the build never
+  // wrote. Point it at the channel the build actually published.
+  if (CHANNEL) updater.channel = CHANNEL;
   updater.httpExecutor = new NodeHttpExecutor();
   updater.setFeedURL({ provider: "generic", url: feedUrl });
   updater.autoDownload = false;
