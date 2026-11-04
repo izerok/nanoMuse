@@ -297,14 +297,25 @@ jobs:
           if [ "$BUILD_RESULT" != "success" ]; then
             echo "::warning::a platform's build failed; attaching the installers of the platforms that built, so the release is not left empty. SHA256SUMS-desktop.txt lists those only; fix the platform and run the workflow again with release_tag=$TAG to complete the set."
           fi
-          # the release is created by scripts/release-apk.sh right after it pushes the tag;
-          # give it up to fifteen minutes
+          # Fork-only: gh release view/upload resolve the release by tag, and that
+          # lookup returns 404 for a draft release, so resolve it by id through the
+          # releases list (drafts do appear there) and upload through the uploads API.
+          # The wait is still bounded: fifteen minutes.
+          (cd packages && sha256sum * > SHA256SUMS-desktop.txt && cat SHA256SUMS-desktop.txt)
+          ID=""
           for i in $(seq 1 90); do
-            if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then break; fi
+            ID="$(gh api "repos/$REPO/releases" --paginate --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -1)"
+            if [ -n "$ID" ]; then break; fi
             sleep 10
           done
-          gh release view "$TAG" -R "$REPO" >/dev/null
-          # packages/* carries the Windows update assets with the installers (latest.yml, the
-          # .exe.blockmap); SHA256SUMS-desktop.txt covers them the same way
-          (cd packages && sha256sum * > SHA256SUMS-desktop.txt && cat SHA256SUMS-desktop.txt)
-          gh release upload "$TAG" packages/* -R "$REPO" --clobber
+          test -n "$ID" || { echo "no release with tag $TAG" >&2; exit 1; }
+          for f in packages/*; do
+            NAME="$(basename "$f")"
+            OLD="$(gh api "repos/$REPO/releases/$ID/assets" --paginate --jq ".[] | select(.name==\"$NAME\") | .id" | head -1)"
+            if [ -n "$OLD" ]; then gh api -X DELETE "repos/$REPO/releases/$ID/assets/$OLD" >/dev/null; fi
+            curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/octet-stream" \
+              --data-binary @"$f" \
+              "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=$NAME" > "upload-$NAME.json"
+            grep -q '"browser_download_url"' "upload-$NAME.json" || { cat "upload-$NAME.json" >&2; exit 1; }
+            echo "attached $NAME"
+          done
