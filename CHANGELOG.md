@@ -75,7 +75,8 @@ All notable changes to nanoMuse. The format follows [Keep a Changelog](https://k
 
 - **Drew the desktop server picker with the page's own card styles.** The server row, its address form and its buttons now use the same card rows, fields and pills as the network row next to them, and a pending server change offers the same restart button the network row does, instead of the primitives' own look.
 
-- **Kept the Windows installer's update-assets check passing for pre-release builds.** The check's updater now considers pre-release candidates, and it reads the pre-release channel metadata file (beta.yml) when the build writes no latest.yml, so an unofficial build's assets verify the same way a stable release's do.
+- **Kept the Windows installer's update-assets check passing for pre-release builds.** The check's updater now considers pre-release candidates, and it reads the pre-release channel metadata file (named after the version's pre-release tag, unofficial.yml for 1.0.10-unofficial.1) when the build writes no latest.yml, so an unofficial build's assets verify the same way a stable release's do.
+- **Hardened the desktop Release attach step.** The delete of a same-named old asset is retried and no longer kills the step on a single failed call, and the step now logs the release id and each file it attaches, so a future attach failure names the call that failed.
 
 - **Kept plugin choices across desktop restarts.** Startup preserved the saved bundle list and its order instead of replacing it with defaults, keeping enabled agent teams and automatic authorization review enabled and disabled automations disabled. For [#731](https://github.com/nano-muse/nanoMuse/issues/731).
 

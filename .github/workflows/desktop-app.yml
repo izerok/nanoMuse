@@ -297,10 +297,13 @@ jobs:
           if [ "$BUILD_RESULT" != "success" ]; then
             echo "::warning::a platform's build failed; attaching the installers of the platforms that built, so the release is not left empty. SHA256SUMS-desktop.txt lists those only; fix the platform and run the workflow again with release_tag=$TAG to complete the set."
           fi
-          # Fork-only: gh release view/upload resolve the release by tag, and that
-          # lookup returns 404 for a draft release, so resolve it by id through the
-          # releases list (drafts do appear there) and upload through the uploads API.
-          # The wait is still bounded: fifteen minutes.
+          # Fork-only: resolve the release by id through the releases list (drafts
+          # do appear there) and upload through the uploads API. The step runs
+          # under bash -e, so a bare failing gh call exits at once: the delete of
+          # a same-named old asset is retried, and if it still fails the upload
+          # decides (201 means the old asset really was gone, 422 means it is
+          # still there). The wait for the release itself is still bounded:
+          # fifteen minutes.
           (cd packages && sha256sum * > SHA256SUMS-desktop.txt && cat SHA256SUMS-desktop.txt)
           ID=""
           for i in $(seq 1 90); do
@@ -309,10 +312,20 @@ jobs:
             sleep 10
           done
           test -n "$ID" || { echo "no release with tag $TAG" >&2; exit 1; }
+          echo "release id: $ID"
           for f in packages/*; do
             NAME="$(basename "$f")"
+            echo "attaching $NAME"
             OLD="$(gh api "repos/$REPO/releases/$ID/assets" --paginate --jq ".[] | select(.name==\"$NAME\") | .id" | head -1)"
-            if [ -n "$OLD" ]; then gh api -X DELETE "repos/$REPO/releases/$ID/assets/$OLD" >/dev/null; fi
+            if [ -n "$OLD" ]; then
+              echo "deleting old asset $NAME ($OLD)"
+              DELETED=""
+              for i in $(seq 1 3); do
+                if gh api -X DELETE "repos/$REPO/releases/$ID/assets/$OLD" >/dev/null; then DELETED="yes"; break; fi
+                sleep 5
+              done
+              if [ -z "$DELETED" ]; then echo "::warning::could not delete old asset $NAME ($OLD); the upload below decides" >&2; fi
+            fi
             curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/octet-stream" \
               --data-binary @"$f" \
               "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=$NAME" > "upload-$NAME.json"

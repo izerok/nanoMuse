@@ -38,21 +38,28 @@ const dist = resolve(
   "..",
   process.argv.find((a) => a.startsWith("--dist="))?.slice("--dist=".length) ?? "dist",
 );
+const shellVersion = JSON.parse(readFileSync(join(dist, "..", "package.json"), "utf8")).version;
 /**
  * The update metadata file electron-builder wrote: latest.yml for a stable version,
- * and the pre-release channel file (beta.yml) for a pre-release version. Fork-only
- * fallback: upstream's check runs stable versions only, so it only ever looked for
- * latest.yml, and a pre-release build fails there before the updater is even involved.
+ * and the pre-release channel file for a pre-release version. For 1.0.10-unofficial.1
+ * that file is unofficial.yml: the channel is the version's pre-release tag, not
+ * "beta". Fork-only fallback chain: upstream's check runs stable versions only, so
+ * it only ever looked for latest.yml, and a pre-release build fails there before the
+ * updater is even involved.
  */
 function findMetadata() {
-  for (const name of ["latest.yml", "beta.yml"]) {
+  const names = ["latest.yml", "beta.yml"];
+  const prereleaseTag = String(shellVersion).split("-")[1]?.split(".")[0];
+  if (prereleaseTag) names.push(`${prereleaseTag}.yml`);
+  for (const name of names) {
     const path = join(dist, name);
     if (existsSync(path)) return path;
   }
   const found = readdirSync(dist).filter((n) => n.endsWith(".yml"));
-  throw new Error(`no update metadata: neither latest.yml nor beta.yml is in ${dist}; found ${found.join(", ") || "no .yml files"}; the win publish config did not take`);
+  throw new Error(`no update metadata: none of ${names.join(", ")} is in ${dist}; found ${found.join(", ") || "no .yml files"}; the win publish config did not take`);
 }
 const YML = findMetadata();
+const YML_NAME = YML.split(/[\\/]/).pop();
 const TIMEOUT_MS = 10 * 60 * 1000; // the installer is a couple of hundred megabytes over loopback
 
 /** latest.yml, electron-builder's update metadata: the version and the files it promises. */
@@ -63,7 +70,7 @@ function readMetadata() {
   const files = /^files:\s*$/m.exec(text);
   const entry = files ? /^  - url:\s*(\S+)\s*\n    sha512:\s*(\S+)\s*\n    size:\s*(\d+)\s*$/m.exec(text) : null;
   if (!version || !entry) {
-    throw new Error(`latest.yml is not in the shape electron-updater writes (version ${JSON.stringify(version)}, files entry ${Boolean(entry)})`);
+    throw new Error(`${YML_NAME} is not in the shape electron-updater writes (version ${JSON.stringify(version)}, files entry ${Boolean(entry)})`);
   }
   return { version, installer: entry[1], sha512: entry[2], size: Number(entry[3]) };
 }
@@ -264,14 +271,13 @@ function shorten(text) {
 const meta = readMetadata();
 const installerPath = join(dist, meta.installer);
 const blockmapPath = `${installerPath}.blockmap`;
-const shellVersion = JSON.parse(readFileSync(join(dist, "..", "package.json"), "utf8")).version;
 
 console.log(`update feed check: dist ${dist}`);
-console.log(`  metadata: version ${meta.version}, installer ${meta.installer}, sha512 ${meta.sha512.slice(0, 12)}…, ${meta.size} bytes`);
+console.log(`  metadata: ${YML_NAME} version ${meta.version}, installer ${meta.installer}, sha512 ${meta.sha512.slice(0, 12)}…, ${meta.size} bytes`);
 
 // The set belongs to one version: the metadata, the installer it names and the blockmap the
 // update library uses for differential downloads, all of this build.
-expect(meta.version === shellVersion, `latest.yml's version (${meta.version}) is the shell's version (${shellVersion})`);
+expect(meta.version === shellVersion, `${YML_NAME}'s version (${meta.version}) is the shell's version (${shellVersion})`);
 expect(meta.installer.includes(meta.version), `the installer's name carries the same version (${meta.installer})`);
 expect(existsSync(installerPath), `the installer is in the build output (${meta.installer})`);
 expect(existsSync(blockmapPath), `the installer's blockmap is in the build output (${meta.installer}.blockmap)`);
