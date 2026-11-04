@@ -161,4 +161,10 @@ jobs:
             sleep 10
           done
           gh release view "$TAG" -R "$REPO" >/dev/null
-          gh release upload "$TAG" packages/*.ipa -R "$REPO" --clobber
+          # the downloaded artifact keeps whatever layout the upload gave it, so find
+          # the IPA instead of assuming it sits flat in packages/
+          ls -R packages
+          IPA="$(find packages -name '*.ipa' -print -quit)"
+          test -n "$IPA" || { echo "no .ipa in the downloaded artifact" >&2; exit 1; }
+          echo "uploading $IPA"
+          gh release upload "$TAG" "$IPA" -R "$REPO" --clobber
