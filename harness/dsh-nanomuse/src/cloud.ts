@@ -25,7 +25,7 @@
  * (`/events`) carrying the live state — registered when the web server is
  * present; the headless and SDK profiles get the service without routes.
  */
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { ApprovalDesk, appLabel, appOf, type ApprovalScope, isOwnApp, checkForUpdate, compareVersions, DEVICE_GRANT_PREFIX, grantCovers, HoldDesk, modelFor, pickChatModel, pickHandsModel, REMOTE_CONTROL_GRANT_ID, scheduleRunIds, sharedConnectors, standingGrants, takesImages, UPDATE_RETRY_MS, updateCacheFresh, withGrant, type Grant, type Hold, type HoldTool, type PendingApproval, type StandingGrant, type UpdateInfo } from './desk.ts'
 import { arch, homedir, hostname, release, type, userInfo } from 'node:os'
@@ -66,6 +66,9 @@ import { PHONE_CARD_SECONDS, PhoneApprovals, type CardStatus } from './phone-app
 import { editImage as ownEditImage, generateImage as ownGenerateImage, imageShapeOf, type ImageEndpoint } from './images.ts'
 import { checkMove, checkScreenshot, displayInfo, isBlack, runtimeInfo, screenHead, type MoveCheck, type RuntimeInfo, type ScreenshotCheck } from './hands-check.ts'
 import { apiOf, baseUrlFor, CAPABILITIES, capabilitiesForAuth, capabilitiesOf, CHATGPT_KEY_REF, CHATGPT_PROVIDER, ChatGptDesk, hasUserinfo, keyRefFor, kindOf, listModelRows, listModels, loadCatalogue, modelsOf, ownProviderRow, parseModelReasoning, regionOf, sighted, typedModelIds, USERINFO_TEXT, type Capability, type ChatGptState, type LoginView, type OwnModel, type OwnProvider, type ProviderEntry, type Region } from './providers.ts'
+import { inheritCloudCapacity, type CapacityProviders } from './cloud-llm.ts'
+
+const EMPTY_RELAY_MODELS: readonly RelayModel[] = []
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -466,6 +469,8 @@ export interface MediaState {
 export const VIDEO_OFF = 'off'
 /** How long a video-model check against a provider is trusted. */
 const VIDEO_CHECK_TTL_MS = 24 * 60 * 60_000
+/** Sessions whose log facts stay cached for the sync; the newest chats the column shows are a few dozen. */
+const LOG_CACHE_SESSIONS = 64
 
 /** What Settings → Media shows. */
 export interface MediaView {
@@ -624,7 +629,9 @@ export default class NanomuseCloud extends Service {
   readonly profile: ProfileStore
   readonly hub: HubClient
   private state: State = {}
+  private capacityCache: { providers: CapacityProviders; models: readonly RelayModel[]; result: CapacityProviders } | undefined
   private busy: Promise<unknown> = Promise.resolve()
+  private stateWrites: Promise<void> = Promise.resolve()
   private readonly streams = new Set<ServerResponse>()
   private readonly changeListeners = new Set<() => void>()
   private readonly calls = new Map<string, HandsCall>()
@@ -662,6 +669,9 @@ export default class NanomuseCloud extends Service {
    * What the sync needs of a session's log, read once per change: a session's log is read
    * in full (and decompressed) by `inspect`, so the title, the lines and the prompts'
    * positions are kept here until the session's next event (`session/event`) drops them.
+   * Capped: an entry holds a session's whole decompressed transcript, and the chats the
+   * sync and the column actually touch are a few dozen of the account's newest; the
+   * oldest untouched entries go, to be re-read if ever asked for again.
    */
   private readonly logCache = new Map<string, { title?: { at: number; title: string }; lines?: SessionLine[]; prompts?: Array<{ key: string; time: number }> }>()
   /** Approvals the stage may answer (C2) and holds of the hands (C1). */
@@ -3326,6 +3336,19 @@ export default class NanomuseCloud extends Service {
     return this.ctx.credentials.resolve(credentialRef(TOKEN_REF)).then((r) => r?.value)
   }
 
+  /** The persisted relay catalogue, reused by the adapter's default-capacity layer. */
+  capacityModels(): readonly RelayModel[] { return this.state.models ?? EMPTY_RELAY_MODELS }
+
+  /** Runtime defaults only: the editable settings remain the person's original values. */
+  providerDefaults<T extends CapacityProviders>(providers: T): T {
+    const models = this.capacityModels()
+    const cached = this.capacityCache
+    if (cached?.providers === providers && cached.models === models) return cached.result as T
+    const result = inheritCloudCapacity(providers, models)
+    this.capacityCache = { providers, models, result }
+    return result
+  }
+
   // -- the provider row -----------------------------------------------------------
 
   /**
@@ -3336,7 +3359,14 @@ export default class NanomuseCloud extends Service {
    * budget) and each is scaled to the pixel budget before it is encoded.
    */
   providerRow(models: RelayModel[]): Record<string, unknown> {
-    return providerRowFor(this.relayDoor.openaiBase || this.relay.openaiBase, models, this.state.deviceId ?? '')
+    const section = this.ctx.settings.describe().find((row) => row.ns === LLM_ROW)
+    const providers = (section?.value as { providers?: Record<string, Record<string, unknown>> } | undefined)?.providers
+    const previous = providers?.[PROVIDER_ID] ?? {}
+    const base = providerRowFor(this.relayDoor.openaiBase || this.relay.openaiBase, models, this.state.deviceId ?? '')
+    const oldModels = Array.isArray(previous.models) ? previous.models as Record<string, unknown>[] : []
+    return { ...previous, ...base, models: (base.models as Record<string, unknown>[]).map((model) => ({
+      ...oldModels.find((old) => old.id === model.id), ...model,
+    })) }
   }
 
   /**
@@ -3729,7 +3759,16 @@ export default class NanomuseCloud extends Service {
     if (!entry) {
       entry = {}
       this.logCache.set(sessionId, entry)
+      // Entries are refreshed on reads below; the head is the least recently used.
+      while (this.logCache.size > LOG_CACHE_SESSIONS) {
+        const oldest = this.logCache.keys().next().value
+        if (oldest === undefined) break
+        this.logCache.delete(oldest)
+      }
     }
+    // Reading an existing entry refreshes its place in the eviction order too.
+    this.logCache.delete(sessionId)
+    this.logCache.set(sessionId, entry)
     return entry
   }
 
@@ -3829,8 +3868,22 @@ export default class NanomuseCloud extends Service {
 
   private async writeState(): Promise<void> {
     const path = this.statePath()
-    await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, JSON.stringify(this.state, null, 2) + '\n', { mode: 0o600 })
+    // Capture each requested snapshot before yielding, and commit writes in that order.
+    const contents = JSON.stringify(this.state, null, 2) + '\n'
+    const write = async (): Promise<void> => {
+      await mkdir(dirname(path), { recursive: true })
+      const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`
+      try {
+        await writeFile(tmp, contents, { mode: 0o600, flag: 'wx' })
+        await rename(tmp, path)
+        await chmod(path, 0o600).catch(() => undefined)
+      } finally {
+        await rm(tmp, { force: true }).catch(() => undefined)
+      }
+    }
+    const next = this.stateWrites.then(write, write)
+    this.stateWrites = next.catch(() => undefined)
+    await next
   }
 
   private serialize<T>(work: () => Promise<T>): Promise<T> {
@@ -4484,7 +4537,7 @@ function sameModels(a: RelayModel[], b: RelayModel[]): boolean {
   const key = (models: RelayModel[]) =>
     models
       .filter((m) => m.kind === 'chat')
-      .map((m) => `${m.id}:${m.name}:${m.inputModalities.join(',')}`)
+      .map((m) => `${m.id}:${m.name}:${m.inputModalities.join(',')}:${m.contextWindow ?? ''}:${m.maxTokens ?? ''}`)
       .sort()
       .join('|')
   return key(a) === key(b)

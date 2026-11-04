@@ -1,5 +1,7 @@
 # Android App
 
+设置 → 技能中的内置技能可以查看、导出和停用。名称、内容和文件由 App 管理，因此不提供编辑、更新和删除。需要自定义时，可以导出后换一个名称再导入。内置 `skill-creator` 指南使用与模型服务商无关的说明。
+
 `android/` 是手机上的 nanoMuse：[OpenMinis](https://github.com/OpenMinis/OpenMinis)
 1.13（GPL-3.0）：一个原生 App，智能体**在手机上**运行，Linux shell、浏览器、MCP 服务器、
 技能和定时任务都装在 APK 里，再加上 nanoMuse 自己的身份、设计和功能。属于 nanoMuse 的一切
@@ -312,6 +314,79 @@ keytool -genkeypair -keystore ~/.nanomuse-release/nanomuse.jks -alias nanomuse \
 
 仅用于聊天测试的模拟器构建（`-Pnm.abi=x86_64`）会排除缓存中的 arm64 proot 和 Alpine 根文件系统资源。切回默认的 arm64 构建后会重新包含这些资源，无需删除缓存。
 
+### 在 Windows 上使用 WSL {#windows-wsl}
+
+在 x64 Windows 上，使用 WSL 2 中的 x86_64 Ubuntu 完成整个构建。原生构建脚本支持
+Linux 和 macOS 主机，不支持 Windows shell。尚未安装时，先按
+[WSL 安装说明](https://learn.microsoft.com/zh-cn/windows/wsl/install)操作，再打开 Ubuntu。
+只有下面第一条命令在管理员 PowerShell 中运行：
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+后续命令都在 Ubuntu 中运行。把代码、SDK 和缓存放在 Linux 文件系统中，而不是
+`/mnt/c` 下；shell 脚本保持 LF 换行：
+
+```bash
+sudo apt update
+sudo apt install -y git curl unzip zip build-essential pkg-config openjdk-21-jdk-headless
+mkdir -p ~/src
+git clone --config core.autocrlf=false https://github.com/nano-muse/nanoMuse.git ~/src/nanoMuse
+cd ~/src/nanoMuse
+git submodule update --init android/deps/proot
+```
+
+安装 [Linux 版 Go](https://go.dev/doc/install)，把它的 `go` 命令加入 Ubuntu 的 `PATH`；
+[Android 工作流](https://github.com/nano-muse/nanoMuse/blob/main/.github/workflows/android.yml)
+使用 Go 1.26。下载 **Linux 版** Android SDK Command-Line Tools，按
+[sdkmanager 安装说明](https://developer.android.com/tools/sdkmanager)设置，以
+`$HOME/Android/Sdk` 为 SDK 目录。可执行文件应位于
+`$HOME/Android/Sdk/cmdline-tools/latest/bin/sdkmanager`。Windows 版 Android Studio
+安装的 SDK 不包含这次构建所需的 Linux NDK 可执行文件。
+
+```bash
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+export ANDROID_HOME="$HOME/Android/Sdk"
+export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+export GOROOT="$(go env GOROOT)"
+export GOPATH="$(go env GOPATH)"
+export PATH="$GOPATH/bin:$PATH"
+export GOTOOLCHAIN=auto
+
+java -version
+go version                         # 应显示 linux/amd64
+sdkmanager --sdk_root="$ANDROID_HOME" --licenses
+sdkmanager --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-36" \
+  "build-tools;35.0.0" "cmake;3.22.1" "ndk;27.2.12479018"
+
+bash scripts/android/build-natives.sh
+cd android/src/android
+./gradlew :app:assembleDebug --console=plain --no-daemon
+```
+
+APK 位于 Gradle 工程目录下的 `app/build/outputs/apk/debug/app-debug.apk`。
+需要时把生成的 APK 复制到 Windows，构建目录仍保留在 Linux 中。
+
+Gradle 在 Ubuntu 内的 `$HOME/.android/debug.keystore` 创建 debug 签名密钥。
+如果后续 debug 构建需要覆盖安装这个 APK，保留这把位于代码目录之外的密钥。
+它可能与 Windows 用户目录里的密钥不同。debug APK 不能覆盖另一把密钥签名的官方 APK；
+使用自己的 release 密钥时，按上面的 release 签名说明操作。
+
+如果 Kotlin 报 Java 堆内存不足，先用 `free -h` 查看 WSL 可用内存。
+机器能同时满足 Windows 和 WSL 的内存需求时，可以只为这次构建提高 Gradle 与 Kotlin
+daemon 的上限，不修改仓库配置。例如在同一 Gradle 工程目录中运行：
+
+```bash
+./gradlew :app:assembleDebug --console=plain --no-daemon \
+  '-Dorg.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8' \
+  '-Pkotlin.daemon.jvmargs=-Xmx6g'
+```
+
+这些是可选的堆内存上限，不是最低要求。按 WSL 实际可用内存选择，并为其他进程留出空间。
+
+
 ## 发布 {#releases}
 
 `.github/workflows/android.yml` 在 `android/` 下每有改动就构建 debug APK（「debug APK · arm64-v8a」
@@ -346,3 +421,46 @@ keytool -genkeypair -keystore ~/.nanomuse-release/nanomuse.jks -alias nanomuse \
 | `connectors/`、`ui/connectors/` | 连接器目录（`ConnectorsCatalogue` 读取资源文件）、MCP 授权发现与注册（`McpAuthDiscovery`）、连接和令牌刷新（`Connectors`）、这台手机连接了什么并发布到 profile、其他设备连接了什么（`SharedConnectors`）、「设置 → 连接器」页面 |
 | `ui/cloud/` | 登录、账号屏、设备部分 |
 | `res/values*/nm_strings.xml` | nanoMuse 的全部字符串，App 支持的十七种语言各一份（英语、简体中文、繁體中文、德语、西班牙语、菲律宾语、法语、印尼语、日语、韩语、马来语、波兰语、巴西葡萄牙语、罗马尼亚语、俄语、泰语、土耳其语）；每个文件的键相同，只有英语文件里标了 `translatable="false"` 的两条（中继地址示例和产品名 `nanoMuse Cloud`）例外，缺的回落到英语 |
+
+## 继续中断的备份 {#export-resume}
+
+备份与还原页面可继续或丢弃中断的导出。继续时必须使用原来的类别、文件大小上限、对话文件和凭据选项，并保留原标识及时间截止点，复用已验证的完成类别。加密备份需要重新输入密码，不能改为明文继续；日志从不保存密码。加密和打包使用可丢弃的副本，需要为该副本预留临时空间。失败的任务会保留私有暂存数据，直到继续或丢弃。计划任务会报告需要用户选择，而不会替换中断任务。成品仍使用可互操作的 .minisbak 格式。
+
+恢复导出时还会校验已保存的文件索引，以及暂存数据和内容文件；即使索引长度未变，目标路径或元数据被改动也会拒绝继续。
+
+## 中断还原的恢复 {#restore-recovery}
+
+Android 在还原共享文件、技能、记忆、MCP 配置、服务商或环境变量前保存恢复快照。类别还原失败时会回滚；若进程中断，下次启动会在打开数据仓库前恢复该类别。恢复失败会保留快照并阻止正常启动，以便重试。对话仍按原有规则合并，此功能不提供完整的对话历史回滚。恢复元数据不包含在导出内容中。
+
+环境变量恢复也会刷新当前进程中的列表；原来没有元数据文件时，部分导入留下的条目会被清除。
+
+## 直接向另一台设备发送任务 {#direct-tasks-to-another-device}
+
+以 `@设备名称` 开头发送文字，任务会直接通过 Hub 到达该设备，本机模型不再先用一轮对话决定如何委派。远端设备使用自己的模型、工具和配置。这仍是单次任务，不会把后续消息的执行位置固定到该设备。
+
+聊天会实时显示设备名称、工具步骤和回复文字。分段文字会替换当前段落，不会重复添加消息。不支持流式回复的设备仍可返回最终答案。审批沿用模型委派任务使用的本机卡片和限定范围的授权；「停止」会取消远端的本次调用，并撤回它尚未回答的卡片。
+
+设备离线或名称有歧义时，消息留在输入框。设备任务只接收文字，请先移除附件和粘贴的文件内容。当前一轮结束后才能发送下一条设备任务；普通本机消息仍沿用现有队列。调用失败前可能已有部分步骤执行，因此会明确显示失败或没有回复。最终文字和设备来源只保存一次；重新打开聊天时不会重建实时工具卡片。
+
+Android 跨设备任务最多等待十五分钟，与中继的任务时限一致。调用方超时或取消时，会尝试按原调用编号停止目标任务，清理最多等待十五秒。已经结束的调用编号不会停止同一对话中的后续任务。
+
+远端任务也沿用本地回复的前台服务跟踪。离开对话后成功完成并保存的回复会显示未读标记；取消、失败或未能保存的回复不会标为未读。
+
+## 未读回复 {#unread-replies}
+
+对话不可见时成功完成的回复，会在 Muse 抽屉和经典对话列表中标记为未读。折叠的经典分组也会显示未读提示。打开对话即可清除标记。失败、取消或重复的完成事件不会产生未读标记。该状态仅在本机当前进程内保存，与运行和暂停标记独立。此功能覆盖 #531 的未读回复部分，不代表完成其中所有运行状态和审批提议。
+
+两种布局都以当前处于前台且可见的对话为准，草稿发送首条消息后也会继续跟踪其实际标识。切换到其他标签页、打开覆盖对话的页面或将应用置于后台后，后续完成的回复会标记为未读。
+
+## 用 @ 选择设备 {#picking-a-device-with}
+
+在消息开头输入 `@`，可接收任务的在线设备会列在文件之前。按名称筛选后点击，也可用现有的方向键和回车选择。设备行显示名称、手机或电脑图标、操作系统、在线状态和设备 ID。
+
+选择后会插入完整名称。同名设备用 `@名称 [设备ID]` 区分；有歧义的简称或未限定的同名不会默认选第一台。委派指令使用稳定的设备 ID。消息中间的提及仍只列出文件。
+
+## 来自其他设备的 Emoji 形象 {#emoji-avatars-from-another-device}
+
+在桌面或网页选择的 emoji 形象也会显示在 Android 上，并保留背景色。emoji 与生成的形象存放在同一目录，重启后仍保留，也沿用现有的账号隔离。emoji 为空时显示 ✨，颜色无效时使用蓝色（`#0064d4`）。
+
+生成的形象和个人短片仍按原有优先级显示。修改智能体名字或连接器不会覆盖未改变的远端形象；明确重置形象才会恢复小龙。本次不增加 Android 上的 emoji 选择器。
+
