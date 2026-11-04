@@ -261,7 +261,11 @@ jobs:
             harness/desktop/dist/*.tar.gz
             harness/desktop/dist/*.exe
             harness/desktop/dist/*.exe.blockmap
-            harness/desktop/dist/latest.yml
+            # Fork-only: the channel file is latest.yml for a stable build and the
+            # pre-release tag (unofficial.yml here) for a pre-release build, so take
+            # any metadata file instead of naming latest.yml outright, which left a
+            # pre-release build's channel file off the release entirely.
+            harness/desktop/dist/*.yml
             harness/desktop/dist/*.dmg
             harness/desktop/dist/*.zip
           if-no-files-found: error
