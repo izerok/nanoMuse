@@ -26,6 +26,7 @@
  * present; the headless and SDK profiles get the service without routes.
  */
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { ApprovalDesk, appLabel, appOf, type ApprovalScope, isOwnApp, checkForUpdate, compareVersions, DEVICE_GRANT_PREFIX, grantCovers, HoldDesk, modelFor, pickChatModel, pickHandsModel, REMOTE_CONTROL_GRANT_ID, scheduleRunIds, sharedConnectors, standingGrants, takesImages, UPDATE_RETRY_MS, updateCacheFresh, withGrant, type Grant, type Hold, type HoldTool, type PendingApproval, type StandingGrant, type UpdateInfo } from './desk.ts'
 import { arch, homedir, hostname, release, type, userInfo } from 'node:os'
@@ -113,6 +114,101 @@ export function relayMediaEnabled(baseURL: string): boolean {
   }
 }
 
+/**
+ * Fork-only: the server the desktop talks to, changed from Settings.
+ * The phone's "Use a different server" sheet is the model (its picker checks
+ * `GET /healthz`, https is required unless the host is on one's own network,
+ * and a key belongs to the relay that issued it, so changing server signs
+ * out first). The desktop cannot recreate its relay objects at runtime, so
+ * the choice is kept in `server.json` next to the account snapshot and takes
+ * effect on the next start; the profile's `config.baseURL` is the fallback
+ * when no choice is kept, and "use the default server" deletes the file.
+ */
+export const SERVER_OVERRIDE_FILE = 'server.json'
+
+/** What a person typed, as the base URL it means: a scheme added when none was given (https), trailing slashes gone. Null when it is not a URL with a host. */
+export function normalizeServerAddress(raw: string): string | null {
+  let text = raw.trim()
+  if (!text) return null
+  if (!text.includes('://')) text = `https://${text}`
+  let url: URL
+  try {
+    url = new URL(text)
+  } catch {
+    return null
+  }
+  if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) return null
+  while (text.endsWith('/')) text = text.slice(0, -1)
+  return text || null
+}
+
+/** A host on one's own network, where plain http is allowed: parsed addresses rather than string prefixes, the private, carrier-grade, loopback, link-local and ULA ranges, `localhost`, a name without a dot, and the local suffixes with Tailscale's `.ts.net` among them. The same rule the phone's proxy bypass applies. */
+export function isPrivateHost(host: string): boolean {
+  const name = host.toLowerCase().replace(/%.*$/, '')
+  if (name === 'localhost' || (!name.includes('.') && !name.includes(':'))) return true
+  if (name.endsWith('.local') || name.endsWith('.lan') || name.endsWith('.home') || name.endsWith('.internal') || name.endsWith('.home.arpa') || name.endsWith('.localdomain') || name.endsWith('.ts.net')) return true
+  const v4 = name.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])]
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a === 127 || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127)
+  }
+  if (name.includes(':')) {
+    if (name === '::1') return true
+    const first = name.split(':')[0]
+    if (!first) return false
+    const value = Number.parseInt(first, 16)
+    if (!Number.isFinite(value)) return false
+    return (value & 0xfe00) === 0xfc00 || (value & 0xffc0) === 0xfe80
+  }
+  return false
+}
+
+/** Why an address cannot be used as the relay, as a sentence; null when it can. */
+export function serverProblem(raw: string): string | null {
+  const base = normalizeServerAddress(raw)
+  if (!base) return 'Enter the server\'s address, for example https://relay.example.org.'
+  const url = new URL(base)
+  if (url.username || url.password) return USERINFO_TEXT
+  if (url.protocol === 'https:') return null
+  return isPrivateHost(url.hostname) ? null : 'Use https unless the server is on your own network.'
+}
+
+/** The kept server choice, normalized, or undefined when none is kept or the kept value no longer parses. */
+export async function readServerOverride(dir: string): Promise<string | undefined> {
+  try {
+    const raw = JSON.parse(await readFile(join(dir, SERVER_OVERRIDE_FILE), 'utf8')) as { baseURL?: unknown }
+    if (typeof raw.baseURL !== 'string') return undefined
+    return normalizeServerAddress(raw.baseURL) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** The same read, for the constructor, which cannot wait. */
+export function readServerOverrideSync(dir: string): string | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(join(dir, SERVER_OVERRIDE_FILE), 'utf8')) as { baseURL?: unknown }
+    if (typeof raw.baseURL !== 'string') return undefined
+    const base = normalizeServerAddress(raw.baseURL)
+    return base && !serverProblem(base) ? base : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Keep a server choice, or delete it (null) so the profile's baseURL rules again. Written the way the account snapshot is: a temp file renamed over, mode 0600. */
+export async function writeServerOverride(dir: string, baseURL: string | null): Promise<void> {
+  await mkdir(dir, { recursive: true })
+  const path = join(dir, SERVER_OVERRIDE_FILE)
+  if (baseURL === null) {
+    await rm(path, { force: true })
+    return
+  }
+  const tmp = `${path}.tmp-${process.pid}`
+  await writeFile(tmp, JSON.stringify({ baseURL }, null, 2) + '\n', { mode: 0o600 })
+  await rename(tmp, path)
+}
+
 /** The bundle's version alone, `0.1.41`: what the update check compares with the latest release. */
 export const BUNDLE_VERSION = process.env.NANOMUSE_VERSION ?? '0.0.0'
 /** What this device reports as its software. */
@@ -143,6 +239,10 @@ export interface CloudStatus {
   /** A model can answer: the account's, or a key the person entered in Models. */
   ready: boolean
   baseURL: string
+  /** Fork-only: the server the next start uses, when it differs from the one this start talks to (a choice saved but not yet restarted into). */
+  pendingBaseURL?: string
+  /** Fork-only: a server choice is kept in `server.json`, so "use the default server" has something to delete. */
+  serverOverride?: boolean
   account?: Account
   models: RelayModel[]
   /** The account chat model new chats use; empty when another provider is the default. */
@@ -626,6 +726,8 @@ export default class NanomuseCloud extends Service {
   static Config = Config
 
   readonly relay: Relay
+  /** Fork-only: the relay this start talks to, a kept server choice or the profile's baseURL. */
+  private readonly serverBaseURL: string
   readonly profile: ProfileStore
   readonly hub: HubClient
   private state: State = {}
@@ -731,7 +833,9 @@ export default class NanomuseCloud extends Service {
 
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'nanomuseCloud')
-    this.relay = new Relay(config.baseURL)
+    // Fork-only: a server choice kept from Settings wins over the profile's baseURL for this start.
+    this.serverBaseURL = readServerOverrideSync(this.dir()) ?? config.baseURL
+    this.relay = new Relay(this.serverBaseURL)
     this.chatgpt = new ChatGptDesk({
       command: async () => {
         const info = await runtimeInfo()
@@ -966,7 +1070,7 @@ export default class NanomuseCloud extends Service {
       const kept = new RemoteStore(join(dshHome(), 'nanomuse', 'sync-remote.json'), (error) => this.ctx.logger.warn('nanomuse cloud: remote turns not saved: %s', message(error)))
       this.kept = kept
       const sync = new SyncEngine({
-        relay: new SyncRelay(this.config.baseURL),
+        relay: new SyncRelay(this.serverBaseURL),
         sessions: {
           list: async () => {
             const { items } = await ctx.sessionController.list({}, new AbortController().signal)
@@ -2375,10 +2479,15 @@ export default class NanomuseCloud extends Service {
     const token = await this.token()
     const signedIn = Boolean(token && this.state.account)
     this.signedInCache = signedIn
+    // Fork-only: the server the next start uses, so Settings can say a restart is pending.
+    const kept = await readServerOverride(this.dir())
+    const afterRestart = kept ?? this.config.baseURL
     return {
       signedIn,
       ready: signedIn || (await this.otherProviderReady()),
       baseURL: this.relay.origin,
+      ...(afterRestart !== this.relay.origin ? { pendingBaseURL: afterRestart } : {}),
+      ...(kept ? { serverOverride: true } : {}),
       ...(this.state.account ? { account: this.state.account } : {}),
       models: this.state.models ?? [],
       chatModel: this.chatModel(),
@@ -3264,6 +3373,46 @@ export default class NanomuseCloud extends Service {
       await this.forget()
       return this.status()
     })
+  }
+
+  /**
+   * Fork-only: whether an address answers as a relay, the phone's check (`GET /healthz`
+   * with a 2xx, ten seconds). Throws a RelayError the loopback handler turns into the
+   * code the browser half puts into words.
+   */
+  async checkServer(address: string): Promise<{ baseURL: string; host: string }> {
+    const problem = serverProblem(address)
+    if (problem) throw new RelayError(400, problem === USERINFO_TEXT ? 'url_userinfo' : 'bad_url', problem)
+    const baseURL = normalizeServerAddress(address) as string
+    let res: Response
+    try {
+      res = await fetch(`${baseURL}/healthz`, { signal: AbortSignal.timeout(10000) })
+      await res.arrayBuffer()
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'TimeoutError') throw new RelayError(504, 'timeout', 'The server did not answer in time')
+      throw new RelayError(502, 'unreachable', message(error))
+    }
+    if (!res.ok) throw new RelayError(res.status, `http_${res.status}`, `HTTP ${res.status}`)
+    return { baseURL, host: new URL(baseURL).host }
+  }
+
+  /**
+   * Fork-only: keep a server choice (or delete it for the default), then sign out, as the
+   * phone does when the server changes: a key belongs to the relay that issued it. The
+   * running service keeps talking to the old relay until the desktop app restarts, which
+   * the caller tells the person; the write goes first so a failed sign-out leaves the
+   * choice, not a signed-out account on the old server. Not wrapped in `serialize`:
+   * `signOut` serializes itself, and nesting it would queue behind the outer call.
+   */
+  async setServer(baseURL: string | null): Promise<{ baseURL: string; custom: boolean; needsRestart: boolean }> {
+    if (baseURL === null) {
+      await writeServerOverride(this.dir(), null)
+      return { baseURL: this.config.baseURL, custom: false, needsRestart: true }
+    }
+    const checked = await this.checkServer(baseURL)
+    await writeServerOverride(this.dir(), checked.baseURL)
+    await this.signOut()
+    return { baseURL: checked.baseURL, custom: true, needsRestart: true }
   }
 
   /** Fetch the account's look now (a `profile` frame, or the person asked). */
@@ -4163,6 +4312,16 @@ export default class NanomuseCloud extends Service {
         return send(res, 200, await this.wearFace(String(body.description ?? ''), String(body.style ?? 'muse'), face))
       }
       if (req.method === 'POST' && route === '/sign-out') return send(res, 200, await this.signOut())
+      // Fork-only: the server picker in Settings. Check answers the address; set keeps it (or
+      // deletes it for the default) and signs out, and takes effect on the next start.
+      if (req.method === 'POST' && route === '/server/check') {
+        const body = await json(req)
+        return send(res, 200, await this.checkServer(String(body.address ?? '')))
+      }
+      if (req.method === 'POST' && route === '/server/set') {
+        const body = await json(req)
+        return send(res, 200, await this.setServer(typeof body.baseURL === 'string' ? body.baseURL : null))
+      }
       if (req.method === 'POST' && route === '/data/contribute') {
         const body = await json(req)
         return send(res, 200, await this.setContribute(body.on !== false))

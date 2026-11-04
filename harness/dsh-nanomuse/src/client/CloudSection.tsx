@@ -16,6 +16,7 @@ import { DataRows } from './Memory.tsx'
 import { NetworkRows } from './Network.tsx'
 import { OwnKeyPanel } from './OwnKey.tsx'
 import { useRooms } from './rooms.ts'
+import { ServerPicker } from './ServerPicker.tsx'
 import { SignIn } from './SignIn.tsx'
 
 type Phase = 'loading' | 'signedOut' | 'signedIn'
@@ -223,14 +224,14 @@ export function makeCloudSection(t: Translate, part: 'account' | 'data' = 'accou
         h('div', { style: row },
           h(Button, { variant: 'outline', size: 'sm', disabled: busy, onClick: refresh }, t('refresh')),
           h(Button, { variant: 'ghost', size: 'sm', disabled: busy, onClick: signOut }, busy ? t('signingOut') : t('signOut'))),
-        h('div', { style: muted }, t('relay', { baseURL: status.baseURL })))
+        h(ServerPicker, { t, status, apply }))
     }
 
     if (part === 'data') return h('section', { style: { ...column, maxWidth: 560 } }, h('div', { style: muted }, t('dataSignedOut')), h('h3', { style: heading }, t('dataLocalTitle')), h(DataRows, { t }))
     return h('section', { style: { ...column, maxWidth: 560 } },
       header,
       error ? h('div', { style: errorStyle }, error) : null,
-      h(SignIn, { t, onSignedIn: apply, footer: status ? h('div', { style: muted }, t('relay', { baseURL: status.baseURL })) : null }),
+      h(SignIn, { t, onSignedIn: apply, footer: status ? h(ServerPicker, { t, status, apply }) : null }),
       // Signed out, the own keys are still the person's (C11): the same pickers and rows, so a key
       // can be changed or the ChatGPT sign-in redone without an account.
       h(OwnKeyPanel, { t, onChanged: refreshStatus }),

@@ -70,6 +70,8 @@ All notable changes to nanoMuse. The format follows [Keep a Changelog](https://k
 
 ### Desktop
 
+- **Changed the nanoMuse Cloud server from Settings on the desktop.** Settings → nanoMuse Cloud now shows the server in use with a Change button, like the phone's "Use a different server" sheet: type an address, check it against the relay's health route, and use it only once the check passes, with https required unless the server is on the person's own network. Changing the server signed out first, kept the choice in `server.json` next to the account snapshot, and took effect on the next start of the desktop app; "use the default server" deleted the choice.
+
 - **Kept plugin choices across desktop restarts.** Startup preserved the saved bundle list and its order instead of replacing it with defaults, keeping enabled agent teams and automatic authorization review enabled and disabled automations disabled. For [#731](https://github.com/nano-muse/nanoMuse/issues/731).
 
 - Counted remote coding tools once using the originating agent's counting phase, excluded notes, and reconciled the count with the final result.

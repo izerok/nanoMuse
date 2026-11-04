@@ -101,6 +101,14 @@ speaking as nanoMuse through the `nanomuse` preset, with:
   usage by kind and by model, the password, the devices holding a key, the timeline, deletion),
   read through the host's pass-through routes (`/nanomuse/cloud/me`, `/sessions`,
   `/account-events`, `/password`, `/sign-out-all`, `/delete-account`, `/config`);
+- **the server**: Settings → nanoMuse Cloud shows the relay in use with a Change button,
+  like the phone's "Use a different server" sheet. Type an address, check it against the
+  relay's health route, and use it only once the check passes; https is required unless
+  the server is on your own network. Changing the server signs out first, because a key
+  belongs to the relay that issued it. The choice is kept in `$DSH_HOME/nanomuse/server.json`
+  and takes effect on the next start of the desktop app; "use the default server" deletes
+  it and returns to the profile's server. The profile's `baseURL` and `NANOMUSE_CLOUD_URL`
+  still set the server when no choice is kept;
 - **a clip of your own as the face**: *Your own clip…* under the pen on the agent's page
   and in the avatar studio takes an MP4 or MOV of up to 15 seconds and 30 MB, with H.264
   video, or HEVC when this computer can decode it (Windows and macOS have the decoder, most

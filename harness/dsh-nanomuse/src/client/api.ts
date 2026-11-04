@@ -30,6 +30,10 @@ export interface CloudStatus {
   signedIn: boolean
   ready: boolean
   baseURL: string
+  /** Fork-only: the server the next start uses, when it differs from the one this start talks to. */
+  pendingBaseURL?: string
+  /** Fork-only: a server choice is kept, so "use the default server" has something to delete. */
+  serverOverride?: boolean
   account?: Account
   models: Model[]
   /** The account chat model new chats use; empty when another provider is the default (relay 0.1.34 host). */
