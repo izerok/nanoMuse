@@ -3,14 +3,17 @@
 # 用途：只在 macOS runner 上把 iOS app 编译成无签名 .app，打成 Payload IPA 当作产物下载。
 # 与上游 ios-check.yml 的关系：步骤（checkout 递归子模块、Xcode、Go、Homebrew 包、
 # 依赖缓存、原生依赖构建、无签名 xcodebuild、NanoMuse/ 零警告）原样复用，
-# 差别只在最后多两步：找 .app、打 IPA、上传产物。没有其他改动。
+# 差别只在最后多两步：找 .app、打 IPA、上传产物。给出 release_tag 时再多一个 release
+# job：把 IPA 直挂到已有的 Release（不走压缩包产物）。没有其他改动。
 #
 # 硬边界（本文件自证，跑之前可 grep）：
 #   - 没有任何 secrets.* 引用（grep "secrets\." 应为 0 行）
 #   - 没有 fastlane、没有 upload_to_testflight、没有 app-store 导出
-#   - permissions 只有 contents: read；不写仓库、不建 release、不推送
+#   - 构建 job 只有 contents: read；新增的 release job 只在给出 release_tag 时跑，
+#     权限 contents: write，只往已有的 Release 挂 IPA，不新建 release、不推送代码
 #   - 触发方式只有 workflow_dispatch（手动），不跟随 push/tag 自动跑
 #   - 产物保留 7 天，过期自动删；产物是无签名 IPA，不能直接装机，必须重签（见 docs/PLAN.md §3）
+#   - 挂到 Release 的 IPA 是直链文件，不走产物压缩包
 #
 # 放置位置（需要用户决策后才做，本文件本身不执行放置）：
 #   fork 后的仓库：.github/workflows/ios-unsigned.yml，然后在 Actions 页手动触发。
@@ -19,6 +22,11 @@ name: iOS · unsigned IPA
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Attach the built IPA to this existing release (v1.0.10-unofficial.1, say); empty builds only"
+        required: false
+        default: ""
 
 concurrency:
   group: ios-unsigned-${{ github.ref }}
@@ -127,3 +135,30 @@ jobs:
             android/src/ios/build/xcodebuild.log
           retention-days: 7
           if-no-files-found: error
+
+  release:
+    name: Attach IPA to the release
+    if: inputs.release_tag != ''
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nanoMuse-ios-unsigned-${{ github.run_number }}
+          path: packages
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          # the release already exists (the draft this build belongs to); give it up to fifteen minutes
+          for i in $(seq 1 90); do
+            if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then break; fi
+            sleep 10
+          done
+          gh release view "$TAG" -R "$REPO" >/dev/null
+          gh release upload "$TAG" packages/*.ipa -R "$REPO" --clobber
