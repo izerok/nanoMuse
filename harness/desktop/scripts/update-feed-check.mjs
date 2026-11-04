@@ -26,7 +26,7 @@
 import { createHash } from "node:crypto";
 import http, { createServer } from "node:http";
 import https from "node:https";
-import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,7 +38,21 @@ const dist = resolve(
   "..",
   process.argv.find((a) => a.startsWith("--dist="))?.slice("--dist=".length) ?? "dist",
 );
-const YML = join(dist, "latest.yml");
+/**
+ * The update metadata file electron-builder wrote: latest.yml for a stable version,
+ * and the pre-release channel file (beta.yml) for a pre-release version. Fork-only
+ * fallback: upstream's check runs stable versions only, so it only ever looked for
+ * latest.yml, and a pre-release build fails there before the updater is even involved.
+ */
+function findMetadata() {
+  for (const name of ["latest.yml", "beta.yml"]) {
+    const path = join(dist, name);
+    if (existsSync(path)) return path;
+  }
+  const found = readdirSync(dist).filter((n) => n.endsWith(".yml"));
+  throw new Error(`no update metadata: neither latest.yml nor beta.yml is in ${dist}; found ${found.join(", ") || "no .yml files"}; the win publish config did not take`);
+}
+const YML = findMetadata();
 const TIMEOUT_MS = 10 * 60 * 1000; // the installer is a couple of hundred megabytes over loopback
 
 /** latest.yml, electron-builder's update metadata: the version and the files it promises. */
