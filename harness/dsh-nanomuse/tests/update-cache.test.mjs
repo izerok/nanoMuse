@@ -59,7 +59,11 @@ const checkedByPrevious = (latest) => ({ current: PREVIOUS, latest, newer: true,
 
 test('the bundle version the tests run under is the package version, a release, not the fallback', () => {
   assert.equal(BUNDLE_VERSION, PKG_VERSION)
-  assert.match(BUNDLE_VERSION, /^\d+\.\d+\.\d+$/)
+  // Fork-only: the unofficial build carries a pre-release label after the number, so the
+  // bare-release shape upstream asserts does not hold here; the number itself must still
+  // be above the upstream release it builds on, or the update check would offer that
+  // release as newer than this build.
+  assert.match(BUNDLE_VERSION, /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/)
   assert.notEqual(BUNDLE_VERSION, PREVIOUS)
 })
 

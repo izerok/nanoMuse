@@ -1122,6 +1122,8 @@ export const zh = {
     nuTextZh: "中文文案",
     nuStored: (s: string) => `控制台在 ${s} 设过`,
     nuDefaults: "现在是默认值",
+    recommended: "推荐模型",
+    recNote: "客户端没选模型时用的默认模型，按用途各一个。改动立即生效，不用改环境变量、不用重启中继。",
     config: "环境配置（只读）",
     rows: {
       allowance_cny: "免费额度",
@@ -2267,6 +2269,8 @@ export const en: Strings = {
     nuTextZh: "Text (中文)",
     nuStored: (s: string) => `set here at ${s}`,
     nuDefaults: "defaults in force",
+    recommended: "Recommended models",
+    recNote: "The default model the apps use when none is picked, one per lane. Takes effect at once, no environment edit, no relay restart.",
     config: "Environment (read only)",
     rows: {
       allowance_cny: "Free allowance",

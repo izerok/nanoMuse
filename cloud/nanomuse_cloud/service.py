@@ -30,7 +30,7 @@ from urllib.parse import urlsplit
 from . import __version__, provenance, turnview
 from .analytics import sample_shape
 from .client import client_version, platform_from, platform_of
-from .config import ModelSpec, Settings, menu_warnings
+from .config import LANES, ModelSpec, Settings, menu_warnings
 from .controls import Controls
 from .crypto import IdentifierCrypto
 from .db import Database, now
@@ -52,6 +52,67 @@ HUB_KINDS = ("phone", "computer", "web")
 HUB_DEVICE_ID = re.compile(r"^[A-Za-z0-9._:-]{4,80}$")
 # the settings-table key of the nudges policy (0.18, nudges.py)
 NUDGES_KEY = "nudges"
+
+# Fork-only: the settings-table key of the page's recommended models. The environment
+# (CLOUD_MODELS) still names the menu and its defaults; the page's mapping, lane to
+# model id, sits on top of it, one pick per lane, and survives a restart with the rest
+# of the settings table. A lane the page never set keeps the environment's pick.
+RECOMMENDED_KEY = "recommended"
+
+
+def _recommended_defaults(models: tuple[ModelSpec, ...]) -> dict[str, str]:
+    """The environment's pick per lane: the single chat model recommended in it, if any."""
+    out: dict[str, str] = {}
+    for lane in LANES:
+        picks = [m.id for m in models if m.kind == "chat" and lane in m.recommended_lanes]
+        if len(picks) == 1:
+            out[lane] = picks[0]
+    return out
+
+
+def _clean_recommended_mapping(mapping: Any, models: tuple[ModelSpec, ...]) -> dict[str, str]:
+    """A stored mapping with the entries the current menu no longer supports dropped."""
+    if not isinstance(mapping, dict):
+        return {}
+    by_id = {m.id: m for m in models}
+    out: dict[str, str] = {}
+    for lane, mid in mapping.items():
+        model = by_id.get(mid) if isinstance(mid, str) else None
+        if lane in LANES and model is not None and model.kind == "chat" and lane in model.lanes:
+            out[lane] = mid
+    return out
+
+
+def _apply_recommended(models: tuple[ModelSpec, ...], mapping: dict[str, str]) -> tuple[ModelSpec, ...]:
+    """The menu with the recommended flags redrawn from the effective pick per lane."""
+    effective = {**_recommended_defaults(models), **mapping}
+    out: list[ModelSpec] = []
+    for model in models:
+        if model.kind != "chat":
+            out.append(model)
+            continue
+        lanes = tuple(lane for lane, mid in effective.items() if mid == model.id)
+        out.append(replace(model, recommended=bool(lanes), recommended_for=lanes))
+    return tuple(out)
+
+
+def _validate_recommended_mapping(body: Any, models: tuple[ModelSpec, ...]) -> dict[str, str]:
+    """The page's mapping, checked: every lane known, every pick a chat model serving it."""
+    if not isinstance(body, dict):
+        raise ValueError("recommended models must be an object of lane to model id")
+    by_id = {m.id: m for m in models}
+    out: dict[str, str] = {}
+    for lane, mid in body.items():
+        if lane not in LANES:
+            continue
+        model = by_id.get(mid) if isinstance(mid, str) else None
+        if model is None:
+            raise ValueError(f"no such model: {mid}")
+        if model.kind != "chat" or lane not in model.lanes:
+            raise ValueError(f"{mid} is not a chat model serving {lane}")
+        out[lane] = mid
+    return out
+
 
 # What one request kind is called in the apps' usage breakdown; the ledger
 # keeps the short names.
@@ -533,6 +594,14 @@ class Cloud:
                 good[key] = cls._coerce_setting(key, value)
             except ValueError as e:
                 log.warning("settings: ignoring the stored %s: %s", key, e)
+        if RECOMMENDED_KEY in overrides:
+            # Fork-only: the page's recommended models, over the environment's menu.
+            if isinstance(overrides[RECOMMENDED_KEY], dict):
+                good["models"] = _apply_recommended(
+                    settings.models, _clean_recommended_mapping(overrides[RECOMMENDED_KEY], settings.models)
+                )
+            else:
+                log.warning("settings: ignoring the stored %s: not an object", RECOMMENDED_KEY)
         return replace(settings, **good) if good else settings
 
     def runtime_settings(self) -> dict:
@@ -1703,6 +1772,46 @@ class Cloud:
         log.warning("nudges policy changed from the page: %s", said)
         self.db.add_event("", "nudges.changed", said[:200])
         return self.admin_nudges()
+
+    # -- Fork-only: the recommended model of each lane, set from the page -----------------
+
+    def admin_recommended(self) -> dict:
+        """For the page: the recommended model of each lane in force, the environment's,
+        whether the page set it and when, and the menu to pick from."""
+        row = self.db.settings_get(RECOMMENDED_KEY)
+        stored = _clean_recommended_mapping(row[0] if row else None, self.env.models)
+        defaults = _recommended_defaults(self.env.models)
+        effective = {lane: stored.get(lane) or defaults.get(lane) for lane in LANES}
+        return {
+            "recommended": effective,
+            "defaults": defaults,
+            "stored": row is not None,
+            "updated_at": row[1] if row else None,
+            "models": [{"id": m.id, "kind": m.kind, "lanes": list(m.lanes)} for m in self.env.models],
+        }
+
+    def admin_put_recommended(self, body: dict) -> dict:
+        """The page saved the recommended model of a lane: checked (400 with a plain
+        message when a pick is not a chat model serving that lane), in force at once
+        (the next /v1/models carries it, no restart, no environment edit),
+        kept across restarts. ``{"reset": true}`` removes the stored mapping so the
+        environment's picks are served again."""
+        if body.get("reset") is True:
+            self.db.settings_put(RECOMMENDED_KEY, None)
+            self.s = self._with_overrides(self.env, self.db.settings_all())
+            log.warning("recommended models reset to the environment's from the page")
+            self.db.add_event("", "recommended.changed", "reset to the environment's")
+            return self.admin_recommended()
+        try:
+            mapping = _validate_recommended_mapping(body, self.env.models)
+        except ValueError as e:
+            raise CloudError(400, "bad_request", str(e)) from e
+        self.db.settings_put(RECOMMENDED_KEY, mapping)
+        self.s = self._with_overrides(self.env, self.db.settings_all())
+        said = ", ".join(f"{lane}={mid}" for lane, mid in mapping.items()) or "none"
+        log.warning("recommended models changed from the page: %s", said)
+        self.db.add_event("", "recommended.changed", said[:200])
+        return self.admin_recommended()
 
     def _ledger_row(self, r) -> dict:
         d = dict(r)

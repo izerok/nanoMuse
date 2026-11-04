@@ -7,7 +7,7 @@ import { fmt, money, usd, when } from "../lib/format";
 import { invalidate, useData } from "../lib/hooks";
 import { sameDraft } from "../lib/drafts";
 import { nameOf, useT } from "../lib/i18n";
-import type { Nudges, NudgesPolicy, Overview, RuntimeSettings, Settings } from "../lib/types";
+import type { Nudges, NudgesPolicy, Overview, Recommended, RuntimeSettings, Settings } from "../lib/types";
 import { Btn, Field, Grid, KV, Note, Panel, Pill, Toggle, useDialog, useToast } from "../ui/primitives";
 import { Loaded } from "./common";
 
@@ -15,10 +15,12 @@ export function SettingsPage() {
   const rt = useData<RuntimeSettings>("/v1/admin/settings", { poll: 120_000 });
   const ov = useData<Overview>("/v1/admin/overview?days=7", { maxAge: 120_000 });
   const nu = useData<Nudges>("/v1/admin/nudges", { poll: 300_000 });
+  const rec = useData<Recommended>("/v1/admin/recommended", { poll: 300_000 });
   return (
     <>
       <Loaded q={rt}>{(r) => <Runtime r={r} reload={() => void rt.reload()} />}</Loaded>
       <Loaded q={nu}>{(n) => <NudgesEditor n={n} reload={() => void nu.reload()} />}</Loaded>
+      <Loaded q={rec}>{(r) => <RecommendedEditor r={r} reload={() => void rec.reload()} />}</Loaded>
       <Loaded q={ov}>{(o) => <Environment s={o.settings} />}</Loaded>
     </>
   );
@@ -237,6 +239,80 @@ function NudgesEditor({ n, reload }: { n: Nudges; reload: () => void }) {
             <input className="inp" value={daysUsed} onChange={(e) => setDaysUsed(e.target.value)} />
           </Field>
         </div>
+      </Grid>
+    </Panel>
+  );
+}
+
+// Fork-only: the recommended model of each lane, picked from the menu instead of the
+// environment. An empty pick means "follow the environment"; saving writes only the
+// lanes with a pick, and reset drops the whole stored mapping.
+function RecommendedEditor({ r, reload }: { r: Recommended; reload: () => void }) {
+  const T = useT();
+  const toast = useToast();
+  const dialog = useDialog();
+  const toDraft = (rec: Recommended["recommended"]) =>
+    Object.fromEntries(Object.entries(rec).map(([lane, id]) => [lane, id ?? ""]));
+  const [draft, setDraft] = useState<Record<string, string>>(toDraft(r.recommended));
+  const [busy, setBusy] = useState(false);
+  const seeded = useRef(r.recommended);
+  useEffect(() => {
+    if (sameDraft(seeded.current, r.recommended)) return; // the 5-minute poll, unchanged
+    seeded.current = r.recommended;
+    setDraft(toDraft(r.recommended));
+  }, [r]);
+  const send = async (body: unknown, msg: string) => {
+    setBusy(true);
+    try {
+      await put("/v1/admin/recommended", body);
+      invalidate("/v1/admin/recommended");
+      reload();
+      toast(msg, "ok");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = () => send(Object.fromEntries(Object.entries(draft).filter(([, id]) => id)), T.se.saved);
+  const reset = async () => {
+    if (!(await dialog({ title: T.se.recommended, body: T.g.reset, danger: true }))) return;
+    await send({ reset: true }, T.g.done);
+  };
+  return (
+    <Panel
+      title={T.se.recommended}
+      sub={
+        <>
+          {T.se.recNote} · {r.stored && r.updated_at ? T.se.nuStored(when(r.updated_at)) : T.se.nuDefaults}
+        </>
+      }
+      right={
+        <>
+          <Btn size="sm" onClick={reset} disabled={busy || !r.stored}>
+            {T.g.reset}
+          </Btn>
+          <Btn size="sm" variant="primary" onClick={save} disabled={busy}>
+            {T.g.save}
+          </Btn>
+        </>
+      }
+    >
+      <Grid cols={2}>
+        {Object.keys(r.recommended).map((lane) => (
+          <Field key={lane} label={lane}>
+            <select className="inp" value={draft[lane] ?? ""} onChange={(e) => setDraft({ ...draft, [lane]: e.target.value })}>
+              <option value="">{T.se.clear}</option>
+              {r.models
+                .filter((m) => m.kind === "chat" && m.lanes.includes(lane))
+                .map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.id}
+                  </option>
+                ))}
+            </select>
+          </Field>
+        ))}
       </Grid>
     </Panel>
   );

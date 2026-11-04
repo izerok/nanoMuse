@@ -1,4 +1,4 @@
-# Fork-only workflow (izerok/nanoMuse): builds the self-hosted relay image
+# Fork-only workflow (izerok/nanoMuse-unofficial): builds the self-hosted relay image
 # from cloud/Dockerfile and pushes it to GHCR. Upstream has no relay image
 # workflow (its docker.yml builds the runtime only). Triggered on cloud/
 # changes, on edits to this file, or manually.
@@ -50,8 +50,8 @@ jobs:
             type=sha,prefix=main-,format=short
           labels: |
             org.opencontainers.image.title=nanoMuse relay
-            org.opencontainers.image.description=Self-hosted nanoMuse relay (cloud/) from the izerok/nanoMuse fork: sign-in, device discovery, sync and the OpenAI-shaped proxy. Bring your own provider key.
-            org.opencontainers.image.source=https://github.com/izerok/nanoMuse
+            org.opencontainers.image.description=Self-hosted nanoMuse relay (cloud/) from the izerok/nanoMuse-unofficial fork: sign-in, device discovery, sync and the OpenAI-shaped proxy. Bring your own provider key.
+            org.opencontainers.image.source=https://github.com/izerok/nanoMuse-unofficial
             org.opencontainers.image.licenses=GPL-3.0-or-later
 
       - name: Build and push

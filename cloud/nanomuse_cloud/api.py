@@ -57,6 +57,8 @@
     POST /v1/admin/delete     X-Admin-Token  {account_id | identifier}
     GET  /v1/admin/nudges     X-Admin-Token                     → the nudges policy in force, the defaults, whether the page set it and when (0.18)
     PUT  /v1/admin/nudges     X-Admin-Token  {version?, star{…}} | {reset: true} → set the policy (version bumped by the server) or go back to the defaults
+    GET  /v1/admin/recommended X-Admin-Token                    → the recommended model of each lane in force, the environment's, whether the page set it and when (fork-only)
+    PUT  /v1/admin/recommended X-Admin-Token {chat?, gui?} | {reset: true} → set the recommended model of a lane, or go back to the environment's (fork-only)
     GET  /v1/admin/accounts   X-Admin-Token                     → with identifiers in clear, tokens and money
     GET  /v1/admin/accounts/{id} X-Admin-Token ?days=30         → one account in full: usage by kind/model/day, sign-ins, devices, addresses, timeline
     GET  /v1/admin/accounts/{id}/ledger X-Admin-Token ?limit=&before= → the account's statement, every line, page by page (before = last id shown)
@@ -2645,6 +2647,18 @@ def create_app(
         400 with a plain message otherwise); `version` is bumped by the server. `{"reset":
         true}` goes back to the defaults. In force at once, kept across restarts."""
         return cloud.admin_put_nudges(await _json(request))
+
+    @app.get("/v1/admin/recommended", dependencies=[Depends(admin_dep)])
+    async def admin_recommended_get() -> dict:
+        """The recommended model of each lane (fork-only): what is in force, the
+        environment's, whether the page set it and when, and the menu to pick from."""
+        return cloud.admin_recommended()
+
+    @app.put("/v1/admin/recommended", dependencies=[Depends(admin_dep)])
+    async def admin_recommended_put(request: Request) -> dict:
+        """{chat?: model id, gui?: model id} | {"reset": true}: set the recommended model
+        of a lane, in force at once, kept across restarts (fork-only)."""
+        return cloud.admin_put_recommended(await _json(request))
 
     @app.post("/v1/admin/allowance/apply", dependencies=[Depends(admin_dep)])
     async def admin_allowance_apply(request: Request) -> dict:

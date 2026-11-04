@@ -6,10 +6,14 @@
  * settings page would unmount on sign-out and take the picker with it. A saved choice
  * takes effect on the next start of the desktop app, so the row says so while a
  * restart is pending, and "use the default server" deletes the kept choice.
+ *
+ * The row, the form and the buttons use the page's own card styles (nm-card, nm-row,
+ * nm-field, nm-pill), the same ones the network row next to it uses, so the picker
+ * sits on the same rhythm instead of the primitives' own look.
  */
-import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
 import { createElement as h, useState, type FormEvent, type ReactNode } from 'react'
-import { call, errorStyle, muted, row, type CloudStatus, type Translate, failureText } from './api.ts'
+import { call, type CloudStatus, type Translate, failureText } from './api.ts'
+import { bridge } from './bridge.ts'
 
 interface ServerPickerProps {
   t: Translate
@@ -29,6 +33,7 @@ export function ServerPicker({ t, status, apply }: ServerPickerProps): ReactNode
 
   const pending = status.pendingBaseURL
   const usable = checkedBase !== undefined && checkedInput === address
+  const restart = bridge()?.restartHost
 
   const openPicker = () => {
     setAddress(pending ?? (status.serverOverride ? status.baseURL : ''))
@@ -71,25 +76,48 @@ export function ServerPicker({ t, status, apply }: ServerPickerProps): ReactNode
     }
   }
 
-  return h('div', { 'data-testid': 'nm-server-picker' },
-    h('div', { style: { ...row, justifyContent: 'space-between' } },
-      h('span', null, t('relay', { baseURL: status.baseURL })),
-      h(Button, { variant: 'ghost', size: 'sm', onClick: openPicker }, t('serverChange'))),
-    pending
-      ? h('div', { style: muted }, t('serverPending', { baseURL: pending }), ' ', t('serverSavedRestart'))
-      : null,
+  return h('div', { 'data-testid': 'nm-server-picker', className: 'nm-card' },
     open
-      ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 } },
-          h('div', { style: muted }, t('serverAddressHint')),
-          h(Input, { value: address, onChange: (e: FormEvent<HTMLInputElement>) => setAddress(e.currentTarget.value), placeholder: 'https://relay.example.org', autoFocus: true, 'aria-label': t('serverAddress') }),
-          h('div', { style: row },
-            h(Button, { variant: 'outline', size: 'sm', disabled: checking || busy || !address.trim(), onClick: () => void check() }, checking ? t('serverChecking') : t('serverCheck')),
-            h(Button, { variant: 'primary', size: 'sm', disabled: !usable || checking || busy, onClick: () => void save(checkedBase ?? null) }, t('serverUse')),
+      ? h('form', {
+          className: 'nm-row',
+          style: { flexDirection: 'column', alignItems: 'stretch', gap: 8 },
+          onSubmit: (e: FormEvent) => { e.preventDefault(); void check() },
+        },
+          h('span', { className: 'nm-row-title' }, t('serverAddress')),
+          h('span', { className: 'nm-row-sub nm-wrap' }, t('serverAddressHint')),
+          h('input', {
+            className: 'nm-field',
+            type: 'text',
+            value: address,
+            onChange: (e: FormEvent<HTMLInputElement>) => setAddress(e.currentTarget.value),
+            placeholder: 'https://relay.example.org',
+            autoFocus: true,
+            spellCheck: false,
+            autoCapitalize: 'off',
+            autoCorrect: 'off',
+            'aria-label': t('serverAddress'),
+            'aria-invalid': verdict !== undefined && !verdict.ok,
+          }),
+          verdict ? h('span', { className: verdict.ok ? 'nm-row-sub nm-wrap' : 'nm-row-sub nm-wrap nm-cn-warn', role: verdict.ok ? 'status' : 'alert' }, verdict.text) : null,
+          h('div', { style: { display: 'flex', gap: 8 } },
+            h('button', { type: 'submit', className: 'nm-pill nm-pill-ghost nm-pill-sm', disabled: checking || busy || !address.trim() }, checking ? t('serverChecking') : t('serverCheck')),
+            h('button', { type: 'button', className: 'nm-pill nm-pill-sm', disabled: !usable || checking || busy, onClick: () => void save(checkedBase ?? null) }, t('serverUse')),
             status.serverOverride
-              ? h(Button, { variant: 'ghost', size: 'sm', disabled: checking || busy, onClick: () => void save(null) }, t('serverDefault'))
+              ? h('button', { type: 'button', className: 'nm-pill nm-pill-ghost nm-pill-sm', disabled: checking || busy, onClick: () => void save(null) }, t('serverDefault'))
               : null,
-            h(Button, { variant: 'ghost', size: 'sm', onClick: () => setOpen(false) }, t('cancel'))),
-          verdict ? h('div', { style: verdict.ok ? muted : errorStyle }, verdict.text) : null,
-          error ? h('div', { style: errorStyle }, error) : null)
+            h('button', { type: 'button', className: 'nm-pill nm-pill-ghost nm-pill-sm', onClick: () => setOpen(false) }, t('cancel'))),
+          error ? h('span', { className: 'nm-row-sub nm-wrap nm-cn-warn', role: 'alert' }, error) : null)
+      : h('div', { className: 'nm-row' },
+          h('div', { className: 'nm-row-main' },
+            h('span', { className: 'nm-row-title' }, t('serverTitle')),
+            h('span', { className: 'nm-row-sub nm-wrap' }, status.baseURL)),
+          h('div', { style: { display: 'flex', gap: 8, flexShrink: 0 } },
+            h('button', { type: 'button', className: 'nm-pill nm-pill-ghost nm-pill-sm', onClick: openPicker }, t('serverChange')))),
+    pending
+      ? h('div', { className: 'nm-row' },
+          h('span', { className: 'nm-row-sub nm-wrap', role: 'status' }, t('serverPending', { baseURL: pending }), ' ', t('serverSavedRestart')),
+          restart
+            ? h('button', { type: 'button', className: 'nm-pill nm-pill-sm', style: { flexShrink: 0 }, onClick: () => void restart() }, t('serverRestart'))
+            : null)
       : null)
 }

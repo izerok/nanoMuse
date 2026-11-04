@@ -107,7 +107,8 @@ speaking as nanoMuse through the `nanomuse` preset, with:
   the server is on your own network. Changing the server signs out first, because a key
   belongs to the relay that issued it. The choice is kept in `$DSH_HOME/nanomuse/server.json`
   and takes effect on the next start of the desktop app; "use the default server" deletes
-  it and returns to the profile's server. The profile's `baseURL` and `NANOMUSE_CLOUD_URL`
+  it and returns to the profile's server. While a change is pending, the row offers the
+  same restart button the network row does. The profile's `baseURL` and `NANOMUSE_CLOUD_URL`
   still set the server when no choice is kept;
 - **a clip of your own as the face**: *Your own clip…* under the pen on the agent's page
   and in the avatar studio takes an MP4 or MOV of up to 15 seconds and 30 MB, with H.264

@@ -978,3 +978,10 @@ export interface Nudges {
   stored: boolean;
   updated_at: number | null;
 }
+export interface Recommended {
+  recommended: Record<string, string | null>;
+  defaults: Record<string, string | null>;
+  stored: boolean;
+  updated_at: number | null;
+  models: { id: string; kind: string; lanes: string[] }[];
+}

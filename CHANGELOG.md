@@ -7,6 +7,7 @@ All notable changes to nanoMuse. The format follows [Keep a Changelog](https://k
 
 ### Cloud
 
+- **Set the recommended model of each lane from the operator's page.** Settings → Recommended models lists the relay's menu with one pick per lane (chat, gui), saved to the settings table: it takes effect at once in the next `/v1/models`, survives a restart, and reset returns to the environment's picks, so the operator no longer edits `CLOUD_MODELS` to change a default.
 - Restored the default for invalid numeric preferences saved by the admin console, including blank values.
 - **A visit that is both running and recent counts once in the demo per-day bars.** The bars concatenated the active and recent lists without the dedup the page's own table applies, so a running visit sat in both lists and its day counted it twice, and the bar total disagreed with the visits number printed beside it.
 
@@ -71,6 +72,8 @@ All notable changes to nanoMuse. The format follows [Keep a Changelog](https://k
 ### Desktop
 
 - **Changed the nanoMuse Cloud server from Settings on the desktop.** Settings → nanoMuse Cloud now shows the server in use with a Change button, like the phone's "Use a different server" sheet: type an address, check it against the relay's health route, and use it only once the check passes, with https required unless the server is on the person's own network. Changing the server signed out first, kept the choice in `server.json` next to the account snapshot, and took effect on the next start of the desktop app; "use the default server" deleted the choice.
+
+- **Drew the desktop server picker with the page's own card styles.** The server row, its address form and its buttons now use the same card rows, fields and pills as the network row next to them, and a pending server change offers the same restart button the network row does, instead of the primitives' own look.
 
 - **Kept plugin choices across desktop restarts.** Startup preserved the saved bundle list and its order instead of replacing it with defaults, keeping enabled agent teams and automatic authorization review enabled and disabled automations disabled. For [#731](https://github.com/nano-muse/nanoMuse/issues/731).
 

@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LangContext } from "../lib/i18n";
-import type { Nudges, NudgesPolicy, RuntimeSettings } from "../lib/types";
+import type { Nudges, NudgesPolicy, Recommended, RuntimeSettings } from "../lib/types";
 import { SettingsPage } from "./Settings";
 
 const replies = vi.hoisted(() => new Map<string, unknown>());
@@ -22,9 +22,21 @@ const policy: NudgesPolicy = {
   },
 };
 const nudges: Nudges = { nudges: policy, defaults: policy, stored: false, updated_at: null };
+const rec: Recommended = {
+  recommended: { chat: "model-a", gui: "model-a" },
+  defaults: { chat: "model-a", gui: "model-a" },
+  stored: false,
+  updated_at: null,
+  models: [
+    { id: "model-a", kind: "chat", lanes: ["chat", "gui"] },
+    { id: "model-b", kind: "chat", lanes: ["chat", "gui"] },
+    { id: "pic-1", kind: "image", lanes: [] },
+  ],
+};
 let screen: ReactTestRenderer | undefined;
 const page = () => <LangContext.Provider value={{ lang: "en", setLang: () => {} }}><SettingsPage /></LangContext.Provider>;
 const input = (value: string) => screen!.root.findAllByType("input").find((node) => node.props.value === value);
+const selects = () => screen!.root.findAllByType("select");
 beforeEach(() => { replies.clear(); });
 afterEach(() => { if (screen) act(() => screen!.unmount()); screen = undefined; });
 
@@ -55,5 +67,15 @@ describe("settings polling while editing", () => {
     await act(async () => { screen!.update(page()); });
     expect(input("original")).toBeDefined();
     expect(input("3, 10")).toBeDefined();
+  });
+
+  it("shows the recommended model of each lane and keeps a changed pick in the draft", async () => {
+    replies.set("/v1/admin/recommended", structuredClone(rec));
+    await act(async () => { screen = create(page()); });
+    expect(selects().map((s) => s.props.value)).toEqual(["model-a", "model-a"]);
+    // the image model is not offered for either lane
+    expect(selects()[0].findAllByType("option").map((o) => o.props.value)).toEqual(["", "model-a", "model-b"]);
+    act(() => { selects()[0].props.onChange({ target: { value: "model-b" } }); });
+    expect(selects().map((s) => s.props.value)).toEqual(["model-b", "model-a"]);
   });
 });
